@@ -1,0 +1,18 @@
+
+'roche' is a Python extension for Roche geometry allowing one
+to generate arrays suitable for plotting gas streams and roche 
+lobes.
+
+Installation is the usual:
+
+python setup.py install
+
+but you need to have installed my C++ roche package first and defined
+an environment variable TRM_SOFTWARE to point to the directory containing
+lib and include which contain the libraries and include files.
+
+Documentation available from 'pydoc roche' once you have installed
+the software.
+
+Tom Marsh
+
