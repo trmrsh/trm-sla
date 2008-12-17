@@ -34,9 +34,9 @@ class SlaError(exceptions.Exception):
     def __str__(self):
         return repr(self.value)
 
-def sun_at_elev(longitude, latitude, height, utc1, utc2, elev, wave=0.55, rh=0.2, acc=1.e-5, fast=False):
+def sun_at_elev(longitude, latitude, height, utc1, utc2, elev, wave=0.55, rh=0.2, acc=1.e-5, fast=True):
     """
-    utc = sun_at_elev(utc1, utc2, elev, wave=0.55, rh=0.2, acc=1.e-5, fast=False)
+    utc = sun_at_elev(utc1, utc2, elev, wave=0.55, rh=0.2, acc=1.e-5, fast=True)
 
     Works out when the Sun is at elevation elev. The user supplies times before
     and after the time of interest and this routine narrows down the range. It is 

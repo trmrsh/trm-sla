@@ -282,7 +282,7 @@ sla_sun(PyObject *self, PyObject *args)
 
     double utc, longitude, latitude, height, wave=0.55, rh=0.2;
     int fast=1;
-    if(!PyArg_ParseTuple(args, "dddd|dd:sla.sun", &utc, &longitude, &latitude, &height, &wave, &rh, &fast))
+    if(!PyArg_ParseTuple(args, "dddd|ddi:sla.sun", &utc, &longitude, &latitude, &height, &wave, &rh, &fast))
 	return NULL;
 
     // Some checks on the inputs
@@ -402,7 +402,7 @@ static PyMethodDef SlaMethods[] = {
      "of a parallactic slit; delz is the angle of refraction in degrees."},
 
     {"sun", sla_sun, METH_VARARGS, 
-     "(azimuth, elevation, refract, ra, dec) = sun(utc,longitude,latitude,height,wave=0.55, rh=0.2, fast=True).\n\n"
+     "(azimuth,elevation,refract,ra,dec) = sun(utc,longitude,latitude,height,wave=0.55,rh=0.2,fast=True).\n\n"
      "All times are in MJD. Longitude and latitude are in degrees, east positive;\n"
      "the wavelength of observation wave is in microns; rh is the relative humidity.\n\n"
      "azimuth is measured in degrees, North through East, elevation in degrees above the horizon.\n"
