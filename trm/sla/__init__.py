@@ -1,69 +1,76 @@
 #!/usr/bin/env python
 
-"""sla is an interface to slalib"""
+"""
+an interface to slalib
 
-# This adds some convenience routines written in python that add onto 
-# the C-interface routines contained in sla.cc
+This module defines a few routines to access Pat Wallace's sla through 
+Python.
 
+Functions
+=========
+
+amass       -- calculates observational parameters given position and time
+cldj        -- compute MJD from a date
+djcl        -- compute date from an MJD
+dtt         -- gives TT-UTC
+sun         -- computes Sun's position on the sky.
+sun_at_elev -- works out when the Sun crosses a given elevation
+utc2tdb   -- compute tdb, heliocentric corrections etc
+
+"""
+import sys
+sys.path.append('.')
 from _sla import *
 
+import exceptions
 import re
 
-def date2dmy(dstring):
-    """Returns (day,month,year) as numbers given input dates such as '11 Apr 2004' or 'Apr 11 2004'"""
+# Exception class
+class SlaError(exceptions.Exception):
+    """For throwing exceptions from the sla module"""
+    def __init__(self, value):
+        self.value = value
+            
+    def __str__(self):
+        return repr(self.value)
 
-    rec = re.compile('^\s*(\d\d)\s+([a-zA-Z]{3})\s+(\d\d\d\d)\s*$')
-    m   = rec.match(dstring)
+def sun_at_elev(longitude, latitude, height, utc1, utc2, elev, wave=0.55, rh=0.2, acc=1.e-5, fast=False):
+    """
+    utc = sun_at_elev(utc1, utc2, elev, acc=1.e-5)
 
-    if m:
-        day   = int(m.group(1))
-        year  = int(m.group(3))
-        month = _month_id(m.group(2))
-        if month == 0:
-            raise Exception('Month name = ' + m.group(2) + ' not recognised.')
-    else:
-        rec = re.compile('^\s*([a-zA-Z]{3})\s+(\d\d)\s*(\d\d\d\d)\s*$')
-        m   = rec.match(dstring)
-        if m:
-            day   = int(m.group(2))
-            year  = int(m.group(3))
-            month = _month_id(m.group(1))
-            if month == 0:
-                raise Exception('Month name = ' + m.group(1) + ' not recognised.')
-    return (day,month,year)
+    Works out when the Sun is at elevation elev. The user supplies times before
+    and after the time of interest and this routine narrows down the range. It is 
+    up to the user to bracket the times closely enough that there is no ambiguity
+    about which crossing of the critical elevation is returned.
 
-def _month_id(name):
-    """Identifies a month with an integer from the first three characters, case insensitively"""
-    lname = name.lower()[:4]
-    if   lname == 'jan':
-        month = 1
-    elif lname == 'jeb':
-        month = 2
-    elif lname == 'mar':
-        month = 3
-    elif lname == 'apr':
-        month = 4
-    elif lname == 'may':
-        month = 5
-    elif lname == 'jun':
-        month = 6
-    elif lname == 'jul':
-        month = 7
-    elif lname == 'aug':
-        month = 8
-    elif lname == 'sep':
-        month = 9
-    elif lname == 'oct':
-        month = 10
-    elif lname == 'nov':
-        month = 11
-    elif lname == 'dec':
-        month = 12
-    else:
-        month = 0
-    return month
+    longitude -- longitude of oberving site, East positive, degrees
+    latitude  -- latitude of oberving site, degrees
+    height    -- height of observing site, metres
+    utc1      -- mjd before time of interest
+    utc2      -- mjd after time of interest. Elevation of Sun must be on opposite
+                 sides of elev at utc1 and utc2 or an SlaError is raised
+    elev      -- elevation in degrees
+    wave      -- wavelength of observation, microns
+    rh        -- relative humidity, 0 to 1
+    acc       -- accuracy of final answer
 
-if __name__ == '__main__':
-    dat = '17 Nov 1961'
-    print 'Date = ' + dat + ' is translated to ' + str(date(dat))
- 
+    The utc is returned as a decimal MJD
+    """
+
+    (az1, el1, ref1, ra1, dec1) = sun(utc1,longitude,latitude,height,wave,rh)
+    (az2, el2, ref2, ra2, dec2) = sun(utc2,longitude,latitude,height,wave,rh)
+
+    if (el1 > elev and el2 > elev) or (el1 < elev and el2 < elev):
+        raise SlaError('Initial times do not bracket the critical elevation, el1, el2: ' 
+                       + str(el1) + ', ' + str(el2))
+
+    
+    while utc2 - utc1 > acc:
+        utc = utc1 + (elev-el1)/(el2-el1)*(utc2-utc1)
+        (az, el, ref, ra, dec) = sun(utc,longitude,latitude,height,wave,rh)
+        if (el > elev and el1 > elev) or (el < elev and el1 < elev):
+            utc1 = utc
+        else:
+            utc2 = utc
+    return utc
+

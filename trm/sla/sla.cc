@@ -54,6 +54,26 @@ sla_cldj(PyObject *self, PyObject *args)
 
 };
 
+
+static PyObject* 
+sla_djcl(PyObject *self, PyObject *args)
+{
+
+    double mjd;
+    if(!PyArg_ParseTuple(args, "d", &mjd))
+	return NULL;
+
+    int year, month, day;
+    double frac;
+    int status;
+    slaDjcl(mjd, &year, &month, &day, &frac, &status);
+    if(status == -1){
+	PyErr_SetString(PyExc_ValueError, ("sla.djcl: bad date, < 4701 BC March 1"));
+	return NULL;
+    }
+    return Py_BuildValue("iiid", year, month, day, 24.*frac);
+};
+
 // Computes TDB time corrected for light travel given a UTC (in MJD), 
 // a target position (ICRS), and observatory position
 
@@ -199,7 +219,7 @@ sla_amass(PyObject *self, PyObject *args)
 	return NULL;
     }
 
-    if(wave <= 0. || dec > wave > 1000000.){
+    if(wave <= 0. || wave > 1000000.){
 	PyErr_SetString(PyExc_ValueError, "sla.amass: declination out of range -90 to +90");
 	return NULL;
     }
@@ -253,6 +273,98 @@ sla_amass(PyObject *self, PyObject *args)
 
 };
 
+
+// Computes position of the Sun
+
+static PyObject* 
+sla_sun(PyObject *self, PyObject *args)
+{
+
+    double utc, longitude, latitude, height, wave=0.55, rh=0.2;
+    int fast=1;
+    if(!PyArg_ParseTuple(args, "dddd|dd:sla.sun", &utc, &longitude, &latitude, &height, &wave, &rh, &fast))
+	return NULL;
+
+    // Some checks on the inputs
+    if(longitude < -360. || longitude > +360.){
+	PyErr_SetString(PyExc_ValueError, "sla.sun: longituge out of range -360 to +360");
+	return NULL;
+    }
+
+    if(latitude < -90. || latitude > +90.){
+	PyErr_SetString(PyExc_ValueError, "sla.sun: latitude out of range -90 to +90");
+	return NULL;
+    }
+
+    if(wave <= 0. || wave > 1000000.){
+	PyErr_SetString(PyExc_ValueError, "sla.sun: declination out of range -90 to +90");
+	return NULL;
+    }
+
+    if(rh < 0. || rh > 1.){
+	PyErr_SetString(PyExc_ValueError, "sla.sun: relative humidity out of range 0 to 1");
+	return NULL;
+    }
+
+    // convert angles to those expected by sla routines
+    const double CFAC = Constants::PI/180.;
+    double latr   = CFAC*latitude;
+    double longr  = CFAC*longitude;
+    
+    // first three small corrections factors are assumed zero for ease of use
+    const double DUT  = 0.; // UT1-UTC, seconds
+    const double T    = 285.; // ambient temperature K
+    const double P    = 1013.25; // ambient pressure, mbar
+    const double TLR  = 0.0065;  // lapse rate, K/metre
+
+    // UT1
+    double ut1 = utc + DUT;
+
+    // TT
+    double tt = utc + slaDtt(utc)/Constants::DAY;
+
+    // Compute position of Earth relative to the centre of the Sun and
+    // the barycentre
+    double ph[3], pb[3], vh[3], vb[3];
+    slaEvp(tt, -1., vb, pb, vh, ph);
+    
+    // Nutate
+    double rmatn[3][3], phn[3];
+    slaNut(tt, rmatn);
+    slaDmxv(rmatn, ph, phn);
+
+    // Calculate correction from centre of Earth to observatory
+    double last = slaGmst(ut1) + longr + slaEqeqx(tt);
+    double pv[6];
+    slaPvobs(latr, height, last, pv);
+
+    double sun[3];
+    for(int i=0; i<3; i++)
+	sun[i] = -phn[i]-pv[i];
+
+    double ra, dec, az, el;
+    slaDcc2s(sun, &ra, &dec);
+    slaDe2h(last-ra, dec, latr, &az, &el);
+    double refract=0.;
+
+    if(fast){
+	double refa, refb, zobs;
+	slaRefcoq(T, P, rh, wave, &refa, &refb);
+	slaRefz(Constants::PI/2.-el, refa, refb, &zobs);
+	refract = Constants::PI/2.-el - zobs;
+    }else{
+	for(int i=0; i<5; i++){
+	    double zd = Constants::PI/2.-el-refract;
+	    slaRefro(zd, height, T, P, rh, wave, latr, TLR, 1.e-8, &refract);
+	}
+    }
+
+    // return  azimuth and elevation
+    return Py_BuildValue("ddddd", az/CFAC, (el+refract)/CFAC, refract/CFAC, 
+			 12.*ra/Constants::PI, dec/CFAC);
+
+};
+
 //----------------------------------------------------------------------------------------
 // The methods
 
@@ -263,6 +375,9 @@ static PyMethodDef SlaMethods[] = {
 
     {"cldj", sla_cldj, METH_VARARGS, 
      "mjd = cldj(year, month, day) returns the mjd of the Gregorian calendar date; MJD = JD-2400000.5."},
+
+    {"djcl", sla_djcl, METH_VARARGS, 
+     "(year,month,day,hour) = djcl(mjd) decomposes an mjd into more usual times."},
 
     {"utc2tdb", sla_utc2tdb, METH_VARARGS, 
      "(tt,tdb,btdb,hutc,htdb,vhel,vbar) =\n"
@@ -285,6 +400,14 @@ static PyMethodDef SlaMethods[] = {
      "airmass is the airmass; alt and az are the observed altitude and azimuth in degrees with azimuth\n"
      "measured North through East; ha is the observed hour angle in degrees; pa is the position angle\n"
      "of a parallactic slit; delz is the angle of refraction in degrees."},
+
+    {"sun", sla_sun, METH_VARARGS, 
+     "(azimuth, elevation, refract, ra, dec) = sun(utc,longitude,latitude,height,wave=0.55, rh=0.2).\n\n"
+     "All times are in MJD. Longitude and latitude are in degrees, east positive;\n"
+     "the wavelength of observation wave is in microns; rh is the relative humidity.\n\n"
+     "azimuth is measured in degrees, North through East, elevation in degrees above the horizon.\n"
+     "refract is the angle of refraction in degrees. ra and dec are the position of the Sun for\n"
+     "the mean equator and equinox of the utc supplied, FK5.\n"},
 
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
