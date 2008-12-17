@@ -402,12 +402,14 @@ static PyMethodDef SlaMethods[] = {
      "of a parallactic slit; delz is the angle of refraction in degrees."},
 
     {"sun", sla_sun, METH_VARARGS, 
-     "(azimuth, elevation, refract, ra, dec) = sun(utc,longitude,latitude,height,wave=0.55, rh=0.2).\n\n"
+     "(azimuth, elevation, refract, ra, dec) = sun(utc,longitude,latitude,height,wave=0.55, rh=0.2, fast=True).\n\n"
      "All times are in MJD. Longitude and latitude are in degrees, east positive;\n"
      "the wavelength of observation wave is in microns; rh is the relative humidity.\n\n"
      "azimuth is measured in degrees, North through East, elevation in degrees above the horizon.\n"
      "refract is the angle of refraction in degrees. ra and dec are the position of the Sun for\n"
-     "the mean equator and equinox of the utc supplied, FK5.\n"},
+     "the mean equator and equinox of the utc supplied, FK5. fast determines whether a fast or slow\n"
+     "is used. The fast method is OK for >15 degrees above the horizon, but for accurate values\n"
+     "below this you may want the slow method\n"},
 
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
