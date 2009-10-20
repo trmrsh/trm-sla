@@ -74,6 +74,27 @@ sla_djcl(PyObject *self, PyObject *args)
     return Py_BuildValue("iiid", year, month, day, 24.*frac);
 };
 
+
+static PyObject* 
+sla_eqgal(PyObject *self, PyObject *args)
+{
+
+    double ra, dec;
+    if(!PyArg_ParseTuple(args, "dd", &ra, &dec))
+	return NULL;
+
+    // convert angles to those expected by sla routines
+    const double CFAC = Constants::PI/180.;
+    double rar    = CFAC*15.*ra;
+    double decr   = CFAC*dec;
+    
+    double glong, glat;
+    slaEqgal(rar, decr, &glong, &glat);
+    glong /= CFAC;
+    glat /= CFAC;
+    return Py_BuildValue("dd", glong, glat);
+};
+
 // Computes TDB time corrected for light travel given a UTC (in MJD), 
 // a target position (ICRS), and observatory position
 
@@ -365,6 +386,48 @@ sla_sun(PyObject *self, PyObject *args)
 
 };
 
+// Convert FK4 B1950 to Fk5 J2000 coords
+
+static PyObject* 
+sla_fk425(PyObject *self, PyObject *args)
+{
+
+    double ra4, dec4, pmra4 = 0., pmdec4 = 0., parallax4 = 0., rv4 = 0.; 
+    if(!PyArg_ParseTuple(args, "dd|dddd:sla.precess", &ra4, &dec4, &pmra4, 
+			 &pmdec4, &parallax4, &rv4))
+	return NULL;
+
+    // Some checks on the inputs
+    if(ra4 < 0. || ra4 > 24.){
+	PyErr_SetString(PyExc_ValueError, "sla.fk425: ra out of range 0 to 24");
+	return NULL;
+    }
+
+    if(dec4 < -90. || dec4 > +90.){
+	PyErr_SetString(PyExc_ValueError, "sla.fk425: declination out of range -90 to +90");
+	return NULL;
+    }
+
+    // convert angles to those expected by sla routines
+    const double CFAC = Constants::PI/180.;
+    double rar4    = CFAC*15.*ra4;
+    double decr4   = CFAC*dec4;
+    double pmrar4  = CFAC*pmra4/3600.;
+    double pmdecr4 = CFAC*pmdec4/3600.;
+    
+    double rar5, decr5, pmrar5, pmdecr5, parallax5, rv5;
+    slaFk425(rar4, decr4, pmrar4, pmdecr4, parallax4, rv4, 
+	     &rar5, &decr5, &pmrar5, &pmdecr5, &parallax5, &rv5);
+
+    double ra5    = rar5/CFAC/15.;
+    double dec5   = decr5/CFAC;
+    double pmra5  = 3600.*pmrar5/CFAC;
+    double pmdec5 = 3600.*pmdecr5/CFAC;
+
+    return Py_BuildValue("dddddd", ra5, dec5, pmra5, pmdec5, parallax5, rv5);
+
+};
+
 //----------------------------------------------------------------------------------------
 // The methods
 
@@ -378,6 +441,14 @@ static PyMethodDef SlaMethods[] = {
 
     {"djcl", sla_djcl, METH_VARARGS, 
      "(year,month,day,hour) = djcl(mjd) decomposes an mjd into more usual times."},
+
+    {"eqgal", sla_eqgal, METH_VARARGS, 
+     "(glong,glat) = eqgal(ra,dec) returns galactic coords (degress) given ra, dec (J2000) in hours and degrees."},
+
+    {"fk425", sla_fk425, METH_VARARGS, 
+     "(ra,dec,pmra,pmdec,parallax,rv) = fk425(ra,dec,pmra=0,pmdec=0,parallax=0,rv=0) converts FK4 B1950 to FK5 J2000\n."
+     "ra and dec are in hours and degrees; proper motions are in arcsec/year (not seconds of RA);\n"
+     "parallax is in arcsec and the radial velocity is in km/s.\n"},
 
     {"utc2tdb", sla_utc2tdb, METH_VARARGS, 
      "(tt,tdb,btdb,hutc,htdb,vhel,vbar) =\n"
@@ -394,9 +465,9 @@ static PyMethodDef SlaMethods[] = {
     {"amass", sla_amass, METH_VARARGS, 
      "(airmass, alt, az, ha, pa, delz) =\n"
      "  amass(utc,longitude,latitude,height,ra,dec,wave=0.55,pmra=0,pmdec=0,epoch=2000,parallax=0,rv=0).\n\n"
-     "All times are in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
+     "utc is the UTC time in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
      "hours and degrees; the wavelength of observation wave is in microns; proper motions are in\n"
-     "arcsec/year (not seconds of RA); parallax is in arcsec and the radialvelocity is in km/s.\n\n"
+     "arcsec/year (not seconds of RA); parallax is in arcsec and the radial velocity is in km/s.\n\n"
      "airmass is the airmass; alt and az are the observed altitude and azimuth in degrees with azimuth\n"
      "measured North through East; ha is the observed hour angle in degrees; pa is the position angle\n"
      "of a parallactic slit; delz is the angle of refraction in degrees."},
