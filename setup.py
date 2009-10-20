@@ -35,6 +35,7 @@ setup(name='trm.sla',
       package_dir = {'trm.sla' : os.path.join('trm', 'sla')},
       packages = find_packages(),
       ext_modules=[sla],
+      zip_safe = False,
 
       author='Tom Marsh',
       author_email='t.r.marsh@warwick.ac.uk',
