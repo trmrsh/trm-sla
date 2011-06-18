@@ -1,9 +1,5 @@
-from ez_setup import use_setuptools
-use_setuptools()
-from setuptools import setup, find_packages
-from distutils.core import Extension
-import os
-import numpy
+from distutils.core import setup, Extension
+import os, numpy
 
 """ Setup script for the sla python extension"""
 
@@ -30,12 +26,9 @@ sla = Extension('trm.sla._sla',
                 sources         = [os.path.join('trm', 'sla', 'sla.cc')])
 
 setup(name='trm.sla',
-      namespace_packages = ['trm'],
       version='0.1',
-      package_dir = {'trm.sla' : os.path.join('trm', 'sla')},
-      packages = find_packages(),
+      packages = ['trm', 'trm.sla'],
       ext_modules=[sla],
-      zip_safe = False,
 
       author='Tom Marsh',
       author_email='t.r.marsh@warwick.ac.uk',
