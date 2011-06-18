@@ -15,6 +15,7 @@ djcl        -- compute date from an MJD
 dtt         -- gives TT-UTC
 eqgal       -- conversion from Equatorial (J2000) to galactic coordinates
 fk425       -- convert from FK4 B1950 to FK5 J2000 coordinates.
+galeq       -- convert from galactic to FK5
 sun         -- computes Sun's position on the sky.
 sun_at_elev -- works out when the Sun crosses a given elevation
 utc2tdb     -- compute tdb, heliocentric corrections etc

@@ -95,6 +95,26 @@ sla_eqgal(PyObject *self, PyObject *args)
     return Py_BuildValue("dd", glong, glat);
 };
 
+static PyObject* 
+sla_galeq(PyObject *self, PyObject *args)
+{
+
+    double l, b;
+    if(!PyArg_ParseTuple(args, "dd", &l, &b))
+	return NULL;
+
+    // convert angles to those expected by sla routines
+    const double CFAC = Constants::PI/180.;
+    double lr   = CFAC*l;
+    double br   = CFAC*b;
+    
+    double ra, dec;
+    slaGaleq(lr, br, &ra, &dec);
+    ra   /= 15.*CFAC;
+    dec  /= CFAC;
+    return Py_BuildValue("dd", ra, dec);
+};
+
 // Computes TDB time corrected for light travel given a UTC (in MJD), 
 // a target position (ICRS), and observatory position
 
@@ -158,7 +178,7 @@ sla_utc2tdb(PyObject *self, PyObject *args)
     double last = slaGmst(tdb) + longr + slaEqeqx(tdb);
     double pv[6];
     slaPvobs(latr, height, last, pv);
- 
+
     // Correct for precession/nutation
     double rnpb[3][3];
     slaPneqx(tdb, rnpb);
@@ -169,14 +189,14 @@ sla_utc2tdb(PyObject *self, PyObject *args)
 
     // heliocentric
     hpos += padd;
-    hvel += vadd;
     hpos *= Constants::AU;
+    hvel += Constants::DAY*vadd;
     hvel *= Constants::AU/Constants::DAY;
 
     // barycentric
     bpos += padd;
-    bvel += vadd;
     bpos *= Constants::AU;
+    bvel += Constants::DAY*vadd;
     bvel *= Constants::AU/Constants::DAY;
 
     // At this point 'hpos' and 'bpos' contains the position of the observatory on the 
@@ -279,7 +299,6 @@ sla_amass(PyObject *self, PyObject *args)
     double delz = tanz*(refa + refb*tanz*tanz)/CFAC;
 
     // convert units
-    haob *= 24./Constants::TWOPI;
     double altob   = 90.-zdob/CFAC;
     double airmass = slaAirmas(zdob); 
     azob /= CFAC;
@@ -287,6 +306,8 @@ sla_amass(PyObject *self, PyObject *args)
     // Compute pa
     double paob = slaPa(haob,decr,latr)/CFAC;
     paob = paob > 0. ? paob : 360.+paob;
+
+    haob *= 24./Constants::TWOPI;
 
     // return  airmass, altitude (deg), azimuth (deg, N=0, E=90),
     // hour angle, parallactic angle, angle of refraction
@@ -450,26 +471,29 @@ static PyMethodDef SlaMethods[] = {
      "ra and dec are in hours and degrees; proper motions are in arcsec/year (not seconds of RA);\n"
      "parallax is in arcsec and the radial velocity is in km/s.\n"},
 
+    {"galeq", sla_galeq, METH_VARARGS, 
+     "(ra,dec) = galeq(glong,glat) returns FK5 J2000 coords (hours,degrees) given galactic coords (degrees)."},
+
     {"utc2tdb", sla_utc2tdb, METH_VARARGS, 
      "(tt,tdb,btdb,hutc,htdb,vhel,vbar) =\n"
      "    utc2tdb(utc,longitude,latitude,height,ra,dec,pmra=0,pmdec=0,epoch=2000,parallax=0,rv=0).\n\n"
      "All times are in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
-     " hours and degrees; proper motions are in arcsec/year (not seconds of RA); parallax is in arcsec\n"
+     "hours and degrees; proper motions are in arcsec/year (not seconds of RA); parallax is in arcsec\n"
      "and the radial velocity is in km/s. tt is terrestrial time (once ephemeris time); tdb is\n"
      "barycentric dynamical time; btdb is the barycentric dynamical time corrected for light travel\n"
      "time, i.e. as observed at the barycentre of the Solar system, hutc is the utc corrected for light\n"
-     " travel to the heliocentre (usual form); htdb is the TDB corrected for light travel to the\n"
+     "travel to the heliocentre (usual form); htdb is the TDB corrected for light travel to the\n"
      "barycentre (unusual). vhel and vbar are the apparent radial velocity of the target in km/s\n"
-     " owing to Earth's motion in relative to the helio- and barycentres."},
+     "owing to observer's motion in relative to the helio- and barycentres."},
 
     {"amass", sla_amass, METH_VARARGS, 
      "(airmass, alt, az, ha, pa, delz) =\n"
      "  amass(utc,longitude,latitude,height,ra,dec,wave=0.55,pmra=0,pmdec=0,epoch=2000,parallax=0,rv=0).\n\n"
-     "utc is the UTC time in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
+     "utc is the UTC date/time in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
      "hours and degrees; the wavelength of observation wave is in microns; proper motions are in\n"
      "arcsec/year (not seconds of RA); parallax is in arcsec and the radial velocity is in km/s.\n\n"
      "airmass is the airmass; alt and az are the observed altitude and azimuth in degrees with azimuth\n"
-     "measured North through East; ha is the observed hour angle in degrees; pa is the position angle\n"
+     "measured North through East; ha is the observed hour angle in hours; pa is the position angle\n"
      "of a parallactic slit; delz is the angle of refraction in degrees."},
 
     {"sun", sla_sun, METH_VARARGS, 
