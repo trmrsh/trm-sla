@@ -483,7 +483,7 @@ static PyMethodDef SlaMethods[] = {
      "barycentric dynamical time; btdb is the barycentric dynamical time corrected for light travel\n"
      "time, i.e. as observed at the barycentre of the Solar system, hutc is the utc corrected for light\n"
      "travel to the heliocentre (usual form); htdb is the TDB corrected for light travel to the\n"
-     "barycentre (unusual). vhel and vbar are the apparent radial velocity of the target in km/s\n"
+     "heliocentre (unusual). vhel and vbar are the apparent radial velocity of the target in km/s\n"
      "owing to observer's motion in relative to the helio- and barycentres."},
 
     {"amass", sla_amass, METH_VARARGS, 
