@@ -232,14 +232,25 @@ static PyObject*
 sla_amass(PyObject *self, PyObject *args)
 {
 
-    double utc, ra, dec, longitude, latitude, height;
+    PyObject *iutc = NULL;
+    double ra, dec, longitude, latitude, height;
     double wave=0.55, pmra = 0., pmdec = 0., epoch = 2000., parallax = 0., rv = 0.;
-    if(!PyArg_ParseTuple(args, "dddddd|dddddd:sla.amass", 
-			 &utc, &longitude, &latitude, &height, &ra, &dec, 
+    if(!PyArg_ParseTuple(args, "Oddddd|dddddd:sla.amass", 
+			 &iutc, &longitude, &latitude, &height, &ra, &dec, 
 			 &wave, &pmra, &pmdec, &epoch, &parallax, &rv))
 	return NULL;
 
     // Some checks on the inputs
+    if(!PyArray_Check(iutc)){
+	PyErr_SetString(PyExc_TypeError, "utc must be an array");
+	return NULL;
+    }
+    int nd = PyArray_NDIM(iutc);
+    if(nd != 1){
+	PyErr_SetString(PyExc_ValueError, "utc must be 1D");
+	return NULL;
+    }
+
     if(longitude < -360. || longitude > +360.){
 	PyErr_SetString(PyExc_ValueError, "sla.amass: longituge out of range -360 to +360");
 	return NULL;
@@ -273,10 +284,6 @@ sla_amass(PyObject *self, PyObject *args)
     double decr   = CFAC*dec;
     double pmrar  = CFAC*pmra/3600.;
     double pmdecr = CFAC*pmdec/3600.;
-    
-    // correct for space motion
-    double nepoch = slaEpj(utc);
-    slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
 
     // first three small corrections factors are assumed zero for ease of use
     const double DUT  = 0.; // UT1-UTC, seconds
@@ -286,33 +293,101 @@ sla_amass(PyObject *self, PyObject *args)
     const double P    = 1013.25; // ambient pressure, mbar
     const double RH   = 0.2;     // relative humidity (0-1)
     const double TLR  = 0.0065;  // lapse rate, K/metre
+     
+    // Now some painful setting up ...
+    npy_intp nutc = PyArray_Size(iutc);
+    PyObject *arr = PyArray_FROM_OTF(iutc, NPY_DOUBLE, NPY_IN_ARRAY);
+    if(arr == NULL) return NULL;
+    double *utc = (double *)PyArray_DATA(arr);
 
-    // *observed* azimuth (N->E), zenith distance, hour angle, declination, ra (all radians)
-    double azob, zdob, haob, decob, raob;
-    slaI2o(rar, decr, utc, DUT, longr, latr, height, XP, YP, T, P, RH, wave, TLR, 
-	   &azob, &zdob, &haob, &decob, &raob);
+    npy_intp dim[1] = {nutc};
+    PyArrayObject *oair = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+    if(oair == NULL){
+	Py_DECREF(arr);
+	return NULL;
+    }
+    PyArrayObject *oalt = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+    if(oalt == NULL){
+	Py_DECREF(arr);
+	Py_DECREF(oair);
+	return NULL;
+    }
+    PyArrayObject *oaz = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+    if(oaz == NULL){
+	Py_DECREF(arr);
+	Py_DECREF(oair);
+	Py_DECREF(oalt);
+	return NULL;
+    }
+    PyArrayObject *oha = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+    if(oha == NULL){
+	Py_DECREF(arr);
+	Py_DECREF(oair);
+	Py_DECREF(oalt);
+	Py_DECREF(oaz);
+	return NULL;
+    }
+    PyArrayObject *opa = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+    if(opa == NULL){
+	Py_DECREF(arr);
+	Py_DECREF(oair);
+	Py_DECREF(oalt);
+	Py_DECREF(oaz);
+	Py_DECREF(oha);
+	return NULL;
+    }
+    PyArrayObject *odelz = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+    if(odelz == NULL){
+	Py_DECREF(arr);
+	Py_DECREF(oair);
+	Py_DECREF(oalt);
+	Py_DECREF(oaz);
+	Py_DECREF(oha);
+	Py_DECREF(opa);
+	return NULL;
+    }
+    
+    // data pointers
+    double *airmass = (double*) oair->data;
+    double *altob   = (double*) oalt->data;
+    double *azob    = (double*) oaz->data;
+    double *haob    = (double*) oha->data;
+    double *paob    = (double*) opa->data;
+    double *delz    = (double*) odelz->data;
 
-    // compute refraction
-    double refa, refb;
-    slaRefcoq(T, P, RH, wave, &refa, &refb);
-    double tanz = tan(zdob);
-    double delz = tanz*(refa + refb*tanz*tanz)/CFAC;
+    double nepoch, zdob, decob, raob, refa, refb, tanz;
 
-    // convert units
-    double altob   = 90.-zdob/CFAC;
-    double airmass = slaAirmas(zdob); 
-    azob /= CFAC;
+    for(int i=0; i<nutc; i++){
+	// correct for space motion
+	nepoch = slaEpj(utc[i]);
+	slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
 
-    // Compute pa
-    double paob = slaPa(haob,decr,latr)/CFAC;
-    paob = paob > 0. ? paob : 360.+paob;
+	// *observed* azimuth (N->E), zenith distance, hour angle, declination, ra (all radians)
+	slaI2o(rar, decr, utc[i], DUT, longr, latr, height, XP, YP, T, P, RH, wave, TLR, 
+	       &azob[i], &zdob, &haob[i], &decob, &raob);
 
-    haob *= 24./Constants::TWOPI;
+	// compute refraction
+	slaRefcoq(T, P, RH, wave, &refa, &refb);
+	tanz = tan(zdob);
+	delz[i] = tanz*(refa + refb*tanz*tanz)/CFAC;
+
+	// convert units
+	altob[i]   = 90.-zdob/CFAC;
+	airmass[i] = slaAirmas(zdob); 
+	azob[i]   /= CFAC;
+
+	// Compute pa
+	paob[i] = slaPa(haob[i],decr,latr)/CFAC;
+	paob[i] = paob[i] > 0. ? paob[i] : 360.+paob[i];
+
+	haob[i] *= 24./Constants::TWOPI;
+    }
+
+    Py_DECREF(arr);
 
     // return  airmass, altitude (deg), azimuth (deg, N=0, E=90),
     // hour angle, parallactic angle, angle of refraction
-    return Py_BuildValue("dddddd", airmass, altob, azob, haob, paob, delz);
-
+    return Py_BuildValue("OOOOOO", oair, oalt, oaz, oha, opa, odelz);
 };
 
 
@@ -489,7 +564,7 @@ static PyMethodDef SlaMethods[] = {
     {"amass", sla_amass, METH_VARARGS, 
      "(airmass, alt, az, ha, pa, delz) =\n"
      "  amass(utc,longitude,latitude,height,ra,dec,wave=0.55,pmra=0,pmdec=0,epoch=2000,parallax=0,rv=0).\n\n"
-     "utc is the UTC date/time in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
+     "utc is an array of MJDs. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
      "hours and degrees; the wavelength of observation wave is in microns; proper motions are in\n"
      "arcsec/year (not seconds of RA); parallax is in arcsec and the radial velocity is in km/s.\n\n"
      "airmass is the airmass; alt and az are the observed altitude and azimuth in degrees with azimuth\n"
