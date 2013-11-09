@@ -121,15 +121,41 @@ sla_galeq(PyObject *self, PyObject *args)
 static PyObject* 
 sla_utc2tdb(PyObject *self, PyObject *args)
 {
-
-    double utc, ra, dec, longitude, latitude, height;
+    PyObject *iutc = NULL;
+    double ra, dec, longitude, latitude, height;
     double pmra = 0., pmdec = 0., epoch = 2000., parallax = 0., rv = 0.;
-    if(!PyArg_ParseTuple(args, "dddddd|ddddd:sla.utc2tdb", 
-			 &utc, &longitude, &latitude, &height, &ra, &dec, 
+    if(!PyArg_ParseTuple(args, "Oddddd|ddddd:sla.utc2tdb", 
+			 &iutc, &longitude, &latitude, &height, &ra, &dec, 
 			 &pmra, &pmdec, &epoch, &parallax, &rv))
 	return NULL;
 
     // Some checks on the inputs
+   // Some checks on the inputs
+    npy_intp nutc = 0;
+    double vutc = 0.;
+    if(iutc){
+        if(PyFloat_Check(iutc)){
+            vutc = PyFloat_AsDouble(iutc);
+            if(PyErr_Occurred()){
+                PyErr_SetString(PyExc_ValueError, "sla.amass: could not translate utc value");
+                return NULL;
+            }
+            nutc = 1;
+        }else if(PyArray_Check(iutc)){
+            int nd = PyArray_NDIM(iutc);
+            if(nd != 1){
+                PyErr_SetString(PyExc_ValueError, "sla.amass: utc must be a 1D array or a float");
+                return NULL;
+            }
+        }else{
+            PyErr_SetString(PyExc_TypeError, "sla.amass: utc must be a 1D array or a float");
+            return NULL;
+        }
+    }else{
+        PyErr_SetString(PyExc_ValueError, "sla.amass: utc not defined");
+        return NULL;
+    }
+
     if(longitude < -360. || longitude > +360.){
 	PyErr_SetString(PyExc_ValueError, "sla.utc2tdb: longituge out of range -360 to +360");
 	return NULL;
@@ -163,66 +189,209 @@ sla_utc2tdb(PyObject *self, PyObject *args)
     slaGeoc( latr, height, &u, &v);
     u *= Constants::AU/1000.0;
     v *= Constants::AU/1000.0;
-    double tt  = utc + slaDtt(utc)/Constants::DAY;
-    double tdb = tt  + slaRcc(tt, utc-int(utc), -longr, u, v)/Constants::DAY;
+    if(nutc){
+        double tt  = vutc + slaDtt(vutc)/Constants::DAY;
+        double tdb = tt  + slaRcc(tt, vutc-int(vutc), -longr, u, v)/Constants::DAY;
 
-    // Compute position of Earth relative to the centre of the Sun and
-    // the barycentre
-    double ph[3], pb[3], vh[3], vb[3];
-    slaEpv(tdb, ph, vh, pb, vb);
+        // Compute position of Earth relative to the centre of the Sun and
+        // the barycentre
+        double ph[3], pb[3], vh[3], vb[3];
+        slaEpv(tdb, ph, vh, pb, vb);
+        
+        // Create 3 vectors for simplicity of code
+        Subs::Vec3 hpos(ph), bpos(pb), hvel(vh), bvel(vb);
+        
+        // Calculate correction from centre of Earth to observatory
+        double last = slaGmst(tdb) + longr + slaEqeqx(tdb);
+        double pv[6];
+        slaPvobs(latr, height, last, pv);
+        
+        // Correct for precession/nutation
+        double rnpb[3][3];
+        slaPneqx(tdb, rnpb);
+        slaDimxv(rnpb, pv, pv);
+        slaDimxv(rnpb, pv+3, pv+3);
+        
+        Subs::Vec3 padd(pv), vadd(pv+3);
+        
+        // heliocentric
+        hpos += padd;
+        hpos *= Constants::AU;
+        hvel += Constants::DAY*vadd;
+        hvel *= Constants::AU/Constants::DAY;
 
-    // Create 3 vectors for simplicity of code
-    Subs::Vec3 hpos(ph), bpos(pb), hvel(vh), bvel(vb);
+        // barycentric
+        bpos += padd;
+        bpos *= Constants::AU;
+        bvel += Constants::DAY*vadd;
+        bvel *= Constants::AU/Constants::DAY;
+        
+        // At this point 'hpos' and 'bpos' contains the position of the observatory on the 
+        // BCRS reference frame in metres relative to the helio- and barycentres. Now update 
+        // the target position using space motion data.
+        double nepoch = slaEpj(vutc);
+        slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
+        
+        // Compute position vector of target
+        double tv[3];
+        slaDcs2c(rar, decr, tv);
+        Subs::Vec3 targ(tv);
+        
+        // Finally, the helio- and barycentrically corrected times 
+        double hcorr = dot(targ, hpos)/Constants::C/Constants::DAY;
+        double bcorr = dot(targ, bpos)/Constants::C/Constants::DAY;
+        
+        double btdb  = tdb + bcorr;
+        double htdb  = tdb + hcorr;
+        double hutc  = vutc + hcorr;
+        
+        // and the radial velocities
+        double vhel = -dot(targ, hvel)/1000.;
+        double vbar = -dot(targ, bvel)/1000.;
+        return Py_BuildValue("ddddddd", tt, tdb, btdb, hutc, htdb, vhel, vbar);
 
-    // Calculate correction from centre of Earth to observatory
-    double last = slaGmst(tdb) + longr + slaEqeqx(tdb);
-    double pv[6];
-    slaPvobs(latr, height, last, pv);
+    }else{
 
-    // Correct for precession/nutation
-    double rnpb[3][3];
-    slaPneqx(tdb, rnpb);
-    slaDimxv(rnpb, pv, pv);
-    slaDimxv(rnpb, pv+3, pv+3);
+        // an array has been passed and we need to do lots of setting up
+        // An array has been passed, lots of painful setup ...
+        nutc = PyArray_Size(iutc);
+        PyObject *arr = PyArray_FROM_OTF(iutc, NPY_DOUBLE, NPY_IN_ARRAY);
+        if(arr == NULL) return NULL;
+        double *utc = (double *)PyArray_DATA(arr);
 
-    Subs::Vec3 padd(pv), vadd(pv+3);
+        npy_intp dim[1] = {nutc};
+        PyArrayObject *ott = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(ott == NULL){
+            Py_DECREF(arr);
+            return NULL;
+        }
+        PyArrayObject *otdb = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(otdb == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(ott);
+            return NULL;
+        }
+        PyArrayObject *obtdb = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(obtdb == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(ott);
+            Py_DECREF(otdb);
+            return NULL;
+        }
+        PyArrayObject *ohutc = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(ohutc == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(ott);
+            Py_DECREF(otdb);
+            Py_DECREF(obtdb);
+            return NULL;
+        }
+        PyArrayObject *ohtdb = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(ohtdb == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(ott);
+            Py_DECREF(otdb);
+            Py_DECREF(obtdb);
+            Py_DECREF(ohutc);
+            return NULL;
+        }
+        PyArrayObject *ovhel = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(ovhel == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(ott);
+            Py_DECREF(otdb);
+            Py_DECREF(obtdb);
+            Py_DECREF(ohutc);
+            Py_DECREF(ohtdb);
+            return NULL;
+        }
+        PyArrayObject *ovbar = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(ovbar == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(ott);
+            Py_DECREF(otdb);
+            Py_DECREF(obtdb);
+            Py_DECREF(ohutc);
+            Py_DECREF(ohtdb);
+            Py_DECREF(ovhel);
+            return NULL;
+        }
+        
+        // data pointers
+        double *tt    = (double*) ott->data;
+        double *tdb   = (double*) otdb->data;
+        double *btdb  = (double*) obtdb->data;
+        double *hutc  = (double*) ohutc->data;
+        double *htdb  = (double*) ohtdb->data;
+        double *vhel  = (double*) ovhel->data;
+        double *vbar  = (double*) ovbar->data;
+        
+        for(int i=0; i<nutc; i++){
+            tt[i]  = utc[i] + slaDtt(utc[i])/Constants::DAY;
+            tdb[i] = tt[i]  + slaRcc(tt[i], utc[i]-int(utc[i]), -longr, u, v)/Constants::DAY;
 
-    // heliocentric
-    hpos += padd;
-    hpos *= Constants::AU;
-    hvel += Constants::DAY*vadd;
-    hvel *= Constants::AU/Constants::DAY;
+            // Compute position of Earth relative to the centre of the Sun and
+            // the barycentre
+            double ph[3], pb[3], vh[3], vb[3];
+            slaEpv(tdb[i], ph, vh, pb, vb);
+        
+            // Create 3 vectors for simplicity of code
+            Subs::Vec3 hpos(ph), bpos(pb), hvel(vh), bvel(vb);
+        
+            // Calculate correction from centre of Earth to observatory
+            double last = slaGmst(tdb[i]) + longr + slaEqeqx(tdb[i]);
+            double pv[6];
+            slaPvobs(latr, height, last, pv);
+        
+            // Correct for precession/nutation
+            double rnpb[3][3];
+            slaPneqx(tdb[i], rnpb);
+            slaDimxv(rnpb, pv, pv);
+            slaDimxv(rnpb, pv+3, pv+3);
+        
+            Subs::Vec3 padd(pv), vadd(pv+3);
+        
+            // heliocentric
+            hpos += padd;
+            hpos *= Constants::AU;
+            hvel += Constants::DAY*vadd;
+            hvel *= Constants::AU/Constants::DAY;
 
-    // barycentric
-    bpos += padd;
-    bpos *= Constants::AU;
-    bvel += Constants::DAY*vadd;
-    bvel *= Constants::AU/Constants::DAY;
+            // barycentric
+            bpos += padd;
+            bpos *= Constants::AU;
+            bvel += Constants::DAY*vadd;
+            bvel *= Constants::AU/Constants::DAY;
+        
+            // At this point 'hpos' and 'bpos' contains the position of the observatory on the 
+            // BCRS reference frame in metres relative to the helio- and barycentres. Now update 
+            // the target position using space motion data.
+            double nepoch = slaEpj(utc[i]);
+            slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
+        
+            // Compute position vector of target
+            double tv[3];
+            slaDcs2c(rar, decr, tv);
+            Subs::Vec3 targ(tv);
+        
+            // Finally, the helio- and barycentrically corrected times 
+            double hcorr = dot(targ, hpos)/Constants::C/Constants::DAY;
+            double bcorr = dot(targ, bpos)/Constants::C/Constants::DAY;
+        
+            btdb[i]  = tdb[i] + bcorr;
+            htdb[i]  = tdb[i] + hcorr;
+            hutc[i]  = utc[i] + hcorr;
+        
+            // and the radial velocities
+            vhel[i] = -dot(targ, hvel)/1000.;
+            vbar[i] = -dot(targ, bvel)/1000.;
 
-    // At this point 'hpos' and 'bpos' contains the position of the observatory on the 
-    // BCRS reference frame in metres relative to the helio- and barycentres. Now update 
-    // the target position using space motion data.
-    double nepoch = slaEpj(utc);
-    slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
+        }
 
-    // Compute position vector of target
-    double tv[3];
-    slaDcs2c(rar, decr, tv);
-    Subs::Vec3 targ(tv);
+        Py_DECREF(arr);
 
-    // Finally, the helio- and barycentrically corrected times 
-    double hcorr = dot(targ, hpos)/Constants::C/Constants::DAY;
-    double bcorr = dot(targ, bpos)/Constants::C/Constants::DAY;
-
-    double btdb  = tdb + bcorr;
-    double htdb  = tdb + hcorr;
-    double hutc  = utc + hcorr;
-
-    // and the radial velocities
-    double vhel = -dot(targ, hvel)/1000.;
-    double vbar = -dot(targ, bvel)/1000.;
-
-    return Py_BuildValue("ddddddd", tt, tdb, btdb, hutc, htdb, vhel, vbar);
+        return Py_BuildValue("OOOOOOO", ott, otdb, obtdb, ohutc, ohtdb, ovhel, ovbar);
+    }
 
 };
 
@@ -241,14 +410,29 @@ sla_amass(PyObject *self, PyObject *args)
 	return NULL;
 
     // Some checks on the inputs
-    if(!PyArray_Check(iutc)){
-	PyErr_SetString(PyExc_TypeError, "utc must be an array");
-	return NULL;
-    }
-    int nd = PyArray_NDIM(iutc);
-    if(nd != 1){
-	PyErr_SetString(PyExc_ValueError, "utc must be 1D");
-	return NULL;
+    npy_intp nutc = 0;
+    double vutc = 0.;
+    if(iutc){
+        if(PyFloat_Check(iutc)){
+            vutc = PyFloat_AsDouble(iutc);
+            if(PyErr_Occurred()){
+                PyErr_SetString(PyExc_ValueError, "sla.amass: could not translate utc value");
+                return NULL;
+            }
+            nutc = 1;
+        }else if(PyArray_Check(iutc)){
+            int nd = PyArray_NDIM(iutc);
+            if(nd != 1){
+                PyErr_SetString(PyExc_ValueError, "sla.amass: utc must be a 1D array or a float");
+                return NULL;
+            }
+        }else{
+            PyErr_SetString(PyExc_TypeError, "sla.amass: utc must be a 1D array or a float");
+            return NULL;
+        }
+    }else{
+        PyErr_SetString(PyExc_ValueError, "sla.amass: utc not defined");
+        return NULL;
     }
 
     if(longitude < -360. || longitude > +360.){
@@ -293,101 +477,136 @@ sla_amass(PyObject *self, PyObject *args)
     const double P    = 1013.25; // ambient pressure, mbar
     const double RH   = 0.2;     // relative humidity (0-1)
     const double TLR  = 0.0065;  // lapse rate, K/metre
-     
-    // Now some painful setting up ...
-    npy_intp nutc = PyArray_Size(iutc);
-    PyObject *arr = PyArray_FROM_OTF(iutc, NPY_DOUBLE, NPY_IN_ARRAY);
-    if(arr == NULL) return NULL;
-    double *utc = (double *)PyArray_DATA(arr);
-
-    npy_intp dim[1] = {nutc};
-    PyArrayObject *oair = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
-    if(oair == NULL){
-	Py_DECREF(arr);
-	return NULL;
-    }
-    PyArrayObject *oalt = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
-    if(oalt == NULL){
-	Py_DECREF(arr);
-	Py_DECREF(oair);
-	return NULL;
-    }
-    PyArrayObject *oaz = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
-    if(oaz == NULL){
-	Py_DECREF(arr);
-	Py_DECREF(oair);
-	Py_DECREF(oalt);
-	return NULL;
-    }
-    PyArrayObject *oha = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
-    if(oha == NULL){
-	Py_DECREF(arr);
-	Py_DECREF(oair);
-	Py_DECREF(oalt);
-	Py_DECREF(oaz);
-	return NULL;
-    }
-    PyArrayObject *opa = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
-    if(opa == NULL){
-	Py_DECREF(arr);
-	Py_DECREF(oair);
-	Py_DECREF(oalt);
-	Py_DECREF(oaz);
-	Py_DECREF(oha);
-	return NULL;
-    }
-    PyArrayObject *odelz = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
-    if(odelz == NULL){
-	Py_DECREF(arr);
-	Py_DECREF(oair);
-	Py_DECREF(oalt);
-	Py_DECREF(oaz);
-	Py_DECREF(oha);
-	Py_DECREF(opa);
-	return NULL;
-    }
-    
-    // data pointers
-    double *airmass = (double*) oair->data;
-    double *altob   = (double*) oalt->data;
-    double *azob    = (double*) oaz->data;
-    double *haob    = (double*) oha->data;
-    double *paob    = (double*) opa->data;
-    double *delz    = (double*) odelz->data;
 
     double nepoch, zdob, decob, raob, refa, refb, tanz;
+     
+    if(nutc){
+        // A single utc has been passed and we will return floats.
+        double vazob, vhaob, vdelz, valtob, vairmass, vpaob;
 
-    for(int i=0; i<nutc; i++){
-	// correct for space motion
-	nepoch = slaEpj(utc[i]);
-	slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
+        // correct for space motion
+        nepoch = slaEpj(vutc);
+        slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
+            
+        // *observed* azimuth (N->E), zenith distance, hour angle, declination, ra (all radians)
+        slaI2o(rar, decr, vutc, DUT, longr, latr, height, XP, YP, T, P, RH, wave, TLR, 
+               &vazob, &zdob, &vhaob, &decob, &raob);
+        
+        // compute refraction
+        slaRefcoq(T, P, RH, wave, &refa, &refb);
+        tanz = tan(zdob);
+        vdelz = tanz*(refa + refb*tanz*tanz)/CFAC;
+            
+        // convert units
+        valtob   = 90.-zdob/CFAC;
+        vairmass = slaAirmas(zdob); 
+        vazob   /= CFAC;
+            
+        // Compute pa
+        vpaob = slaPa(vhaob,decr,latr)/CFAC;
+        vpaob = vpaob > 0. ? vpaob : 360.+vpaob;
+            
+        vhaob *= 24./Constants::TWOPI;
 
-	// *observed* azimuth (N->E), zenith distance, hour angle, declination, ra (all radians)
-	slaI2o(rar, decr, utc[i], DUT, longr, latr, height, XP, YP, T, P, RH, wave, TLR, 
-	       &azob[i], &zdob, &haob[i], &decob, &raob);
+        // return  airmass, altitude (deg), azimuth (deg, N=0, E=90),
+        // hour angle, parallactic angle, angle of refraction
+        return Py_BuildValue("dddddd", vairmass, valtob, vazob, vhaob, vpaob, vdelz);
 
-	// compute refraction
-	slaRefcoq(T, P, RH, wave, &refa, &refb);
-	tanz = tan(zdob);
-	delz[i] = tanz*(refa + refb*tanz*tanz)/CFAC;
+    }else{
 
-	// convert units
-	altob[i]   = 90.-zdob/CFAC;
-	airmass[i] = slaAirmas(zdob); 
-	azob[i]   /= CFAC;
+        // An array has been passed, lots of painful setup ...
+        nutc = PyArray_Size(iutc);
+        PyObject *arr = PyArray_FROM_OTF(iutc, NPY_DOUBLE, NPY_IN_ARRAY);
+        if(arr == NULL) return NULL;
+        double *utc = (double *)PyArray_DATA(arr);
 
-	// Compute pa
-	paob[i] = slaPa(haob[i],decr,latr)/CFAC;
-	paob[i] = paob[i] > 0. ? paob[i] : 360.+paob[i];
+        npy_intp dim[1] = {nutc};
+        PyArrayObject *oair = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(oair == NULL){
+            Py_DECREF(arr);
+            return NULL;
+        }
+        PyArrayObject *oalt = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(oalt == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(oair);
+            return NULL;
+        }
+        PyArrayObject *oaz = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(oaz == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(oair);
+            Py_DECREF(oalt);
+            return NULL;
+        }
+        PyArrayObject *oha = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(oha == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(oair);
+            Py_DECREF(oalt);
+            Py_DECREF(oaz);
+            return NULL;
+        }
+        PyArrayObject *opa = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(opa == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(oair);
+            Py_DECREF(oalt);
+            Py_DECREF(oaz);
+            Py_DECREF(oha);
+            return NULL;
+        }
+        PyArrayObject *odelz = (PyArrayObject*) PyArray_SimpleNew(1, dim, PyArray_DOUBLE);
+        if(odelz == NULL){
+            Py_DECREF(arr);
+            Py_DECREF(oair);
+            Py_DECREF(oalt);
+            Py_DECREF(oaz);
+            Py_DECREF(oha);
+            Py_DECREF(opa);
+            return NULL;
+        }
+        
+        // data pointers
+        double *airmass = (double*) oair->data;
+        double *altob   = (double*) oalt->data;
+        double *azob    = (double*) oaz->data;
+        double *haob    = (double*) oha->data;
+        double *paob    = (double*) opa->data;
+        double *delz    = (double*) odelz->data;
+        
+        for(int i=0; i<nutc; i++){
+            // correct for space motion
+            nepoch = slaEpj(utc[i]);
+            slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
+            
+            // *observed* azimuth (N->E), zenith distance, hour angle, declination, ra (all radians)
+            slaI2o(rar, decr, utc[i], DUT, longr, latr, height, XP, YP, T, P, RH, wave, TLR, 
+                   &azob[i], &zdob, &haob[i], &decob, &raob);
+            
+            // compute refraction
+            slaRefcoq(T, P, RH, wave, &refa, &refb);
+            tanz = tan(zdob);
+            delz[i] = tanz*(refa + refb*tanz*tanz)/CFAC;
+            
+            // convert units
+            altob[i]   = 90.-zdob/CFAC;
+            airmass[i] = slaAirmas(zdob); 
+            azob[i]   /= CFAC;
+            
+            // Compute pa
+            paob[i] = slaPa(haob[i],decr,latr)/CFAC;
+            paob[i] = paob[i] > 0. ? paob[i] : 360.+paob[i];
+            
+            haob[i] *= 24./Constants::TWOPI;
+        }
 
-	haob[i] *= 24./Constants::TWOPI;
+        Py_DECREF(arr);
+
+        // return  airmass, altitude (deg), azimuth (deg, N=0, E=90),
+        // hour angle, parallactic angle, angle of refraction
+        return Py_BuildValue("OOOOOO", oair, oalt, oaz, oha, opa, odelz);
     }
-
-    Py_DECREF(arr);
-
-    // return  airmass, altitude (deg), azimuth (deg, N=0, E=90),
-    // hour angle, parallactic angle, angle of refraction
-    return Py_BuildValue("OOOOOO", oair, oalt, oaz, oha, opa, odelz);
 };
 
 
@@ -536,21 +755,21 @@ static PyMethodDef SlaMethods[] = {
      "mjd = cldj(year, month, day) returns the mjd of the Gregorian calendar date; MJD = JD-2400000.5."},
 
     {"djcl", sla_djcl, METH_VARARGS, 
-     "(year,month,day,hour) = djcl(mjd) decomposes an mjd into more usual times."},
+     "year,month,day,hour = djcl(mjd) decomposes an mjd into more usual times."},
 
     {"eqgal", sla_eqgal, METH_VARARGS, 
-     "(glong,glat) = eqgal(ra,dec) returns galactic coords (degress) given ra, dec (J2000) in hours and degrees."},
+     "glong,glat = eqgal(ra,dec) returns galactic coords (degress) given ra, dec (J2000) in hours and degrees."},
 
     {"fk425", sla_fk425, METH_VARARGS, 
-     "(ra,dec,pmra,pmdec,parallax,rv) = fk425(ra,dec,pmra=0,pmdec=0,parallax=0,rv=0) converts FK4 B1950 to FK5 J2000\n."
+     "ra,dec,pmra,pmdec,parallax,rv = fk425(ra,dec,pmra=0,pmdec=0,parallax=0,rv=0) converts FK4 B1950 to FK5 J2000\n."
      "ra and dec are in hours and degrees; proper motions are in arcsec/year (not seconds of RA);\n"
      "parallax is in arcsec and the radial velocity is in km/s.\n"},
 
     {"galeq", sla_galeq, METH_VARARGS, 
-     "(ra,dec) = galeq(glong,glat) returns FK5 J2000 coords (hours,degrees) given galactic coords (degrees)."},
+     "ra,dec = galeq(glong,glat) returns FK5 J2000 coords (hours,degrees) given galactic coords (degrees)."},
 
     {"utc2tdb", sla_utc2tdb, METH_VARARGS, 
-     "(tt,tdb,btdb,hutc,htdb,vhel,vbar) =\n"
+     "tt,tdb,btdb,hutc,htdb,vhel,vbar =\n"
      "    utc2tdb(utc,longitude,latitude,height,ra,dec,pmra=0,pmdec=0,epoch=2000,parallax=0,rv=0).\n\n"
      "All times are in MJD. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
      "hours and degrees; proper motions are in arcsec/year (not seconds of RA); parallax is in arcsec\n"
@@ -559,12 +778,13 @@ static PyMethodDef SlaMethods[] = {
      "time, i.e. as observed at the barycentre of the Solar system, hutc is the utc corrected for light\n"
      "travel to the heliocentre (usual form); htdb is the TDB corrected for light travel to the\n"
      "heliocentre (unusual). vhel and vbar are the apparent radial velocity of the target in km/s\n"
-     "owing to observer's motion in relative to the helio- and barycentres."},
+     "owing to observer's motion in relative to the helio- and barycentres. If utc is a float then\n"
+     "so too will the output. If it is an array, then so will the outputs be."},
 
     {"amass", sla_amass, METH_VARARGS, 
-     "(airmass, alt, az, ha, pa, delz) =\n"
+     "airmass, alt, az, ha, pa, delz =\n"
      "  amass(utc,longitude,latitude,height,ra,dec,wave=0.55,pmra=0,pmdec=0,epoch=2000,parallax=0,rv=0).\n\n"
-     "utc is an array of MJDs. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
+     "utc is an MJD or an array of MJDs. Longitude and latitude are in degrees, east positive; ra and dec are in\n"
      "hours and degrees; the wavelength of observation wave is in microns; proper motions are in\n"
      "arcsec/year (not seconds of RA); parallax is in arcsec and the radial velocity is in km/s.\n\n"
      "airmass is the airmass; alt and az are the observed altitude and azimuth in degrees with azimuth\n"
@@ -572,7 +792,7 @@ static PyMethodDef SlaMethods[] = {
      "of a parallactic slit; delz is the angle of refraction in degrees."},
 
     {"sun", sla_sun, METH_VARARGS, 
-     "(azimuth,elevation,refract,ra,dec) = sun(utc,longitude,latitude,height,wave=0.55,rh=0.2,fast=True).\n\n"
+     "azimuth,elevation,refract,ra,dec = sun(utc,longitude,latitude,height,wave=0.55,rh=0.2,fast=True).\n\n"
      "All times are in MJD. Longitude and latitude are in degrees, east positive;\n"
      "the wavelength of observation wave is in microns; rh is the relative humidity.\n\n"
      "azimuth is measured in degrees, North through East, elevation in degrees above the horizon.\n"
