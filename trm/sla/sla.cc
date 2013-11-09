@@ -6,8 +6,8 @@
 #include "numpy/arrayobject.h"
 #include "slalib.h"
 #include "slamac.h"
-#include "trm_vec3.h"
-#include "trm_constants.h"
+#include "trm/vec3.h"
+#include "trm/constants.h"
 
 #include <iostream>
 
