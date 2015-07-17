@@ -19,7 +19,7 @@ sla_dtt(PyObject *self, PyObject *args)
 
     double utc;
     if(!PyArg_ParseTuple(args, "d:sla.dtt", &utc))
-	return NULL;
+        return NULL;
 
     double d = slaDtt(utc);
 
@@ -29,25 +29,28 @@ sla_dtt(PyObject *self, PyObject *args)
 
 // Implements slaCldj
 
-static PyObject* 
+static PyObject*
 sla_cldj(PyObject *self, PyObject *args)
 {
 
     int year, month, day;
     if(!PyArg_ParseTuple(args, "iii:sla.cldj", &year, &month, &day))
-	return NULL;
+        return NULL;
 
     double mjd;
     int status;
     slaCldj(year, month, day, &mjd, &status);
     if(status == 1){
-	PyErr_SetString(PyExc_ValueError, ("sla.cldj: bad year = " + Subs::str(year)).c_str());
-	return NULL;
+        PyErr_SetString(PyExc_ValueError, ("sla.cldj: bad year = " +
+                                           Subs::str(year)).c_str());
+        return NULL;
     }else if(status == 2){
-	PyErr_SetString(PyExc_ValueError, ("sla.cldj: bad month = " + Subs::str(month)).c_str());
+        PyErr_SetString(PyExc_ValueError, ("sla.cldj: bad month = " +
+                                           Subs::str(month)).c_str());
 	return NULL;
     }else if(status == 3){
-	PyErr_SetString(PyExc_ValueError, ("sla.cldj: bad day = " + Subs::str(day)).c_str());
+        PyErr_SetString(PyExc_ValueError, ("sla.cldj: bad day = " +
+                                           Subs::str(day)).c_str());
 	return NULL;
     }
     return Py_BuildValue("d", mjd);
@@ -55,7 +58,7 @@ sla_cldj(PyObject *self, PyObject *args)
 };
 
 
-static PyObject* 
+static PyObject*
 sla_djcl(PyObject *self, PyObject *args)
 {
 
@@ -130,7 +133,6 @@ sla_utc2tdb(PyObject *self, PyObject *args)
 	return NULL;
 
     // Some checks on the inputs
-   // Some checks on the inputs
     npy_intp nutc = 0;
     double vutc = 0.;
     if(iutc){
@@ -205,15 +207,15 @@ sla_utc2tdb(PyObject *self, PyObject *args)
         double last = slaGmst(tdb) + longr + slaEqeqx(tdb);
         double pv[6];
         slaPvobs(latr, height, last, pv);
-        
+
         // Correct for precession/nutation
         double rnpb[3][3];
         slaPneqx(tdb, rnpb);
         slaDimxv(rnpb, pv, pv);
         slaDimxv(rnpb, pv+3, pv+3);
-        
+
         Subs::Vec3 padd(pv), vadd(pv+3);
-        
+
         // heliocentric
         hpos += padd;
         hpos *= Constants::AU;
@@ -225,26 +227,27 @@ sla_utc2tdb(PyObject *self, PyObject *args)
         bpos *= Constants::AU;
         bvel += Constants::DAY*vadd;
         bvel *= Constants::AU/Constants::DAY;
-        
-        // At this point 'hpos' and 'bpos' contains the position of the observatory on the 
-        // BCRS reference frame in metres relative to the helio- and barycentres. Now update 
-        // the target position using space motion data.
+
+        // At this point 'hpos' and 'bpos' contains the position of the
+        // observatory on the BCRS reference frame in metres relative to the
+        // helio- and barycentres. Now update the target position using space
+        // motion data.
         double nepoch = slaEpj(vutc);
         slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
-        
+
         // Compute position vector of target
         double tv[3];
         slaDcs2c(rar, decr, tv);
         Subs::Vec3 targ(tv);
-        
+
         // Finally, the helio- and barycentrically corrected times 
         double hcorr = dot(targ, hpos)/Constants::C/Constants::DAY;
         double bcorr = dot(targ, bpos)/Constants::C/Constants::DAY;
-        
+
         double btdb  = tdb + bcorr;
         double htdb  = tdb + hcorr;
         double hutc  = vutc + hcorr;
-        
+
         // and the radial velocities
         double vhel = -dot(targ, hvel)/1000.;
         double vbar = -dot(targ, bvel)/1000.;
@@ -252,7 +255,6 @@ sla_utc2tdb(PyObject *self, PyObject *args)
 
     }else{
 
-        // an array has been passed and we need to do lots of setting up
         // An array has been passed, lots of painful setup ...
         nutc = PyArray_Size(iutc);
         PyObject *arr = PyArray_FROM_OTF(iutc, NPY_DOUBLE, NPY_IN_ARRAY);
@@ -342,15 +344,15 @@ sla_utc2tdb(PyObject *self, PyObject *args)
             double last = slaGmst(tdb[i]) + longr + slaEqeqx(tdb[i]);
             double pv[6];
             slaPvobs(latr, height, last, pv);
-        
+
             // Correct for precession/nutation
             double rnpb[3][3];
             slaPneqx(tdb[i], rnpb);
             slaDimxv(rnpb, pv, pv);
             slaDimxv(rnpb, pv+3, pv+3);
-        
+
             Subs::Vec3 padd(pv), vadd(pv+3);
-        
+
             // heliocentric
             hpos += padd;
             hpos *= Constants::AU;
@@ -362,13 +364,14 @@ sla_utc2tdb(PyObject *self, PyObject *args)
             bpos *= Constants::AU;
             bvel += Constants::DAY*vadd;
             bvel *= Constants::AU/Constants::DAY;
-        
-            // At this point 'hpos' and 'bpos' contains the position of the observatory on the 
-            // BCRS reference frame in metres relative to the helio- and barycentres. Now update 
-            // the target position using space motion data.
+
+            // At this point 'hpos' and 'bpos' contains the position of the
+            // observatory on the BCRS reference frame in metres relative to
+            // the helio- and barycentres. Now update the target position
+            // using space motion data.
             double nepoch = slaEpj(utc[i]);
             slaPm(rar, decr, pmrar, pmdecr, parallax, rv, epoch, nepoch, &rar, &decr);
-        
+
             // Compute position vector of target
             double tv[3];
             slaDcs2c(rar, decr, tv);
