@@ -21,15 +21,15 @@ sun_at_elev -- works out when the Sun crosses a given elevation
 utc2tdb     -- compute tdb, heliocentric corrections etc
 
 """
+from __future__ import absolute_import
 import sys
 sys.path.append('.')
-from _sla import *
+from ._sla import *
 
-import exceptions
 import re
 
 # Exception class
-class SlaError(exceptions.Exception):
+class SlaError(Exception):
     """For throwing exceptions from the sla module"""
     def __init__(self, value):
         self.value = value

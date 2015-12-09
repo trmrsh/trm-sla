@@ -807,9 +807,33 @@ static PyMethodDef SlaMethods[] = {
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
-PyMODINIT_FUNC
-init_sla(void)
+#if PY_MAJOR_VERSION >= 3
+    #define MOD_INIT(name) PyMODINIT_FUNC PyInit_##name(void)
+#else
+    #define MOD_INIT(name) PyMODINIT_FUNC init_##name(void)
+#endif
+
+MOD_INIT(_sla)
 {
+    PyObject *m;
+#if PY_MAJOR_VERSION >= 3
+    static struct PyModuleDef moduledef = {
+        PyModuleDef_HEAD_INIT,
+        "_sla",
+        NULL,
+        -1,
+        SlaMethods,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+    };
+    m = PyModule_Create(&moduledef);
+#else
     (void) Py_InitModule("_sla", SlaMethods);
+#endif
     import_array();
+#if PY_MAJOR_VERSION >= 3
+    return m;
+#endif
 }
