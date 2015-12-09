@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+from __future__ import print_function
 from distutils.core import setup, Extension
 import os, numpy
 
@@ -7,11 +9,11 @@ library_dirs = []
 include_dirs = []
 
 # need to direct to where includes and  libraries are
-if os.environ.has_key('TRM_SOFTWARE'):
+if 'TRM_SOFTWARE' in os.environ:
     library_dirs.append(os.path.join(os.environ['TRM_SOFTWARE'], 'lib'))
     include_dirs.append(os.path.join(os.environ['TRM_SOFTWARE'], 'include'))
 else:
-    print >>sys.stderr, "Environment variable TRM_SOFTWARE pointing to location of shareable libraries and includes not defined!"
+    print("Environment variable TRM_SOFTWARE pointing to location of shareable libraries and includes not defined!", file=sys.stderr)
 
 include_dirs.append(numpy.get_include())
 
